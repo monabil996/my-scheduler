@@ -14,13 +14,23 @@ const PRI = [
 ];
 const TCATS = ["Work","Personal","Ideas","Research","Meeting","Learning","Other"];
 const NCATS = ["Work","Personal","Ideas","Reference","Meeting","Research","Journal","Other"];
-const BLANK_T = {title:"",notes:"",category:"Work",priority:"medium",status:"todo",progress:0,dueDate:""};
+const BLANK_T = {title:"",notes:"",category:"Work",priority:"medium",status:"todo",progress:0,dueDate:"",remindAt:""};
 const BLANK_N = {title:"",content:"",category:"Work",pinned:false};
 
 const pc   = id => PRI.find(p=>p.id===id)||PRI[2];
 const fmt  = iso => iso ? new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "";
 const uid  = () => Date.now().toString(36)+Math.random().toString(36).slice(2);
 const today= () => new Date().toISOString().split("T")[0];
+
+// ─── VAPID push helper ────────────────────────────────────────────────────────
+const VAPID_PUB = import.meta.env.VITE_VAPID_PUBLIC_KEY ||
+  "BAAKJlAxDdofuJZIxwmljTawQSKlis5-4ZfKJflsamih3ECcyBJOz5NzzI1PNel1yXB2sVy08PdWNkBTTvqVdds";
+
+function urlBase64ToUint8Array(b64) {
+  const pad = "=".repeat((4 - b64.length % 4) % 4);
+  const raw = atob((b64 + pad).replace(/-/g,"+").replace(/_/g,"/"));
+  return Uint8Array.from([...raw].map(c=>c.charCodeAt(0)));
+}
 
 // ─── Gemini API helper ────────────────────────────────────────────────────────
 const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY;
@@ -89,6 +99,10 @@ export default function App() {
     typeof Notification !== "undefined" ? Notification.permission : "denied"
   );
 
+  // ── Push subscription state ──────────────────────────────────────────────
+  const [pushSub,     setPushSub]     = useState(null);
+  const [pushLoading, setPushLoading] = useState(false);
+
   // ── AI Chat state ────────────────────────────────────────────────────────
   const WELCOME = "Hi! I'm your AI assistant 👋\n\nYou can:\n• Tell me tasks — \"Finish report by Friday\"\n• Save notes — \"Note: meeting moved to 3pm\"\n• Ask questions — \"What are my urgent tasks?\"\n• Draft emails — \"Email team about project delay\"\n• Search the web — \"Find best productivity tips\"";
   const [chatMsgs,    setChatMsgs]    = useState([{role:"ai", text:WELCOME}]);
@@ -114,12 +128,74 @@ export default function App() {
     return unsub;
   },[]);
 
+  // ── Service worker registration + check existing push subscription ────────
+  useEffect(()=>{
+    if(!("serviceWorker" in navigator)) return;
+    navigator.serviceWorker.register("/sw.js").then(async reg=>{
+      const existing = await reg.pushManager.getSubscription();
+      if(existing) setPushSub(existing);
+    }).catch(()=>{});
+  },[]);
+
   // ── Notification helpers ─────────────────────────────────────────────────
   const requestNotifPermission = async () => {
     if(typeof Notification === "undefined") return;
     const perm = await Notification.requestPermission();
     setNotifPerm(perm);
     if(perm === "granted") showT("🔔 Notifications enabled!");
+  };
+
+  // ── Web Push subscribe / unsubscribe ─────────────────────────────────────
+  const subscribePush = async () => {
+    setPushLoading(true);
+    try {
+      const perm = await Notification.requestPermission();
+      setNotifPerm(perm);
+      if(perm !== "granted"){ showT("Please allow notifications first","err"); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUB),
+      });
+      setPushSub(sub);
+      const newCfg = {...cfg, pushSubscription: sub.toJSON()};
+      setCfg(newCfg); setCfgForm(newCfg);
+      await saveConfig(newCfg);
+      await setDoc(doc(db,"subscribedUsers",user.uid),{uid:user.uid,updatedAt:new Date().toISOString()});
+      showT("🔔 Push notifications enabled!");
+    } catch(e){ showT("Push setup failed: "+e.message,"err"); }
+    setPushLoading(false);
+  };
+
+  const unsubscribePush = async () => {
+    setPushLoading(true);
+    try {
+      await pushSub?.unsubscribe();
+      setPushSub(null);
+      const newCfg = {...cfg, pushSubscription: null};
+      setCfg(newCfg); setCfgForm(newCfg);
+      await saveConfig(newCfg);
+      await deleteDoc(doc(db,"subscribedUsers",user.uid));
+      showT("Notifications disabled");
+    } catch(e){ showT("Error: "+e.message,"err"); }
+    setPushLoading(false);
+  };
+
+  const saveRemCfg = async () => {
+    const newCfg = {...cfg, ...cfgForm};
+    setCfg(newCfg);
+    await saveConfig(newCfg);
+    showT("⏰ Reminder settings saved!");
+  };
+
+  const toggleDay = day => {
+    const days = cfgForm.days || ["Mon","Tue","Wed","Thu","Fri"];
+    setCfgForm({...cfgForm, days: days.includes(day)?days.filter(d=>d!==day):[...days,day]});
+  };
+
+  const updateTaskReminder = async (taskId, remindAt) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    await saveTask({...task, remindAt});
   };
 
   const fireNotif = (title, body, tag) => {
@@ -220,7 +296,7 @@ export default function App() {
     setDTid(null);
   };
   const closeTF = ()=>{ setSTF(false); setETid(null); setTForm(BLANK_T); };
-  const openTF  = t=>{ setTForm({title:t.title,notes:t.notes||"",category:t.category,priority:t.priority,status:t.status,progress:t.progress,dueDate:t.dueDate||""}); setETid(t.id); setSTF(true); };
+  const openTF  = t=>{ setTForm({title:t.title,notes:t.notes||"",category:t.category,priority:t.priority,status:t.status,progress:t.progress,dueDate:t.dueDate||"",remindAt:t.remindAt||""}); setETid(t.id); setSTF(true); };
 
   const cycleS = async id => {
     const task = tasks.find(t=>t.id===id); if(!task) return;
@@ -528,7 +604,7 @@ Keep reply friendly and concise.`;
     {/* Tabs */}
     <div className="bg-white border-b border-slate-200 px-4">
       <div className="max-w-3xl mx-auto flex overflow-x-auto">
-        {[{id:"home",l:"🤖 AI"},{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"daily",l:"☀️ Daily"},{id:"import",l:"✨ Import"}].map(t=>(
+        {[{id:"home",l:"🤖 AI"},{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"daily",l:"☀️ Daily"},{id:"reminders",l:"🔔 Reminders"},{id:"import",l:"✨ Import"}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab===t.id?"border-violet-600 text-violet-700":"border-transparent text-slate-500 hover:text-slate-700"}`}>{t.l}</button>
         ))}
       </div>
@@ -771,6 +847,85 @@ Keep reply friendly and concise.`;
         </div>}
       </>}
 
+      {/* ── REMINDERS ── */}
+      {tab==="reminders"&&<div className="space-y-4">
+        <div className="flex items-center justify-between mb-1">
+          <h2 className="text-lg font-bold text-slate-800">🔔 Reminders</h2>
+          <span className="text-xs text-slate-400">Independent of Claude desktop app</span>
+        </div>
+
+        {/* Push status card */}
+        <div className="bg-white rounded-2xl border border-slate-200 p-5">
+          <div className="flex items-center gap-4">
+            <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${pushSub?"bg-violet-100":"bg-slate-100"}`}>🔔</div>
+            <div className="flex-1">
+              <p className="font-semibold text-slate-800">{pushSub?"Push Notifications Active":"Push Notifications Off"}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{pushSub?"Reminders work even when the app is closed":"Enable to receive reminders on this device"}</p>
+            </div>
+            {pushSub
+              ? <button onClick={unsubscribePush} disabled={pushLoading} className="text-sm px-4 py-2 border border-slate-200 text-slate-600 hover:bg-slate-50 rounded-xl font-medium">
+                  {pushLoading?"…":"Disable"}
+                </button>
+              : <button onClick={subscribePush} disabled={pushLoading} className="text-sm px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-semibold">
+                  {pushLoading?"…":"Enable"}
+                </button>
+            }
+          </div>
+        </div>
+
+        {!pushSub&&<div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 text-sm text-amber-800">
+          <p className="font-semibold mb-1">📱 How push notifications work</p>
+          <p className="text-xs leading-relaxed">After enabling, a Vercel cron job runs every hour and sends reminders to your device — no need to have this app open. Requires Vercel environment variables to be set (see deployment guide).</p>
+        </div>}
+
+        {pushSub&&<>
+          {/* Daily reminder config */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-4">Daily Summary</p>
+            <div className="flex items-center gap-3 mb-4">
+              <label className="text-sm text-slate-700 flex-1">Send daily summary at:</label>
+              <input type="time" value={cfgForm.time||"08:00"} onChange={e=>setCfgForm({...cfgForm,time:e.target.value})}
+                className="px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+            </div>
+            <div>
+              <p className="text-sm text-slate-700 mb-2">Send on:</p>
+              <div className="flex gap-1.5 flex-wrap">
+                {["Mon","Tue","Wed","Thu","Fri","Sat","Sun"].map(day=>{
+                  const active=(cfgForm.days||["Mon","Tue","Wed","Thu","Fri"]).includes(day);
+                  return<button key={day} onClick={()=>toggleDay(day)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition-colors ${active?"bg-violet-600 text-white border-violet-600":"border-slate-200 text-slate-500 hover:border-violet-300"}`}>{day}</button>;
+                })}
+              </div>
+            </div>
+            <button onClick={saveRemCfg} className="mt-4 w-full bg-violet-600 hover:bg-violet-700 text-white text-sm font-semibold py-2.5 rounded-xl">
+              Save Schedule
+            </button>
+          </div>
+
+          {/* Per-task reminders */}
+          <div className="bg-white rounded-2xl border border-slate-200 p-5">
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1">Task-Specific Reminders</p>
+            <p className="text-xs text-slate-400 mb-4">Set an exact time to get pinged for a specific task (daily until done)</p>
+            {tasks.filter(t=>t.status!=="done").length===0
+              ? <p className="text-sm text-slate-400 text-center py-4">🎉 No active tasks!</p>
+              : <div className="space-y-2">
+                  {tasks.filter(t=>t.status!=="done")
+                    .sort((a,b)=>({urgent:0,high:1,medium:2,low:3})[a.priority]-({urgent:0,high:1,medium:2,low:3})[b.priority])
+                    .map(task=>(
+                    <div key={task.id} className="flex items-center gap-3 p-3 rounded-xl border border-slate-100 hover:bg-slate-50 transition-colors">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${pc(task.priority).dot}`}/>
+                      <span className="text-sm text-slate-700 flex-1 truncate">{task.title}</span>
+                      <input type="time" value={task.remindAt||""} onChange={e=>updateTaskReminder(task.id,e.target.value)}
+                        className="px-2 py-1.5 border border-slate-200 rounded-lg text-xs text-slate-600 focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                      {task.remindAt&&<span className="text-violet-500 text-sm">🔔</span>}
+                    </div>
+                  ))}
+                </div>
+            }
+          </div>
+        </>}
+      </div>}
+
       {/* ── IMPORT ── */}
       {tab==="import"&&<>
         <div className="mb-4"><h2 className="text-lg font-bold text-slate-800 mb-1">✨ Smart Import</h2><p className="text-slate-400 text-sm">Paste raw notes or brain-dumps. Gemini will extract and categorize tasks.</p></div>
@@ -861,6 +1016,13 @@ Keep reply friendly and concise.`;
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Status</label><select value={tForm.status} onChange={e=>setTForm({...tForm,status:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="todo">To Do</option><option value="inprogress">In Progress</option><option value="done">Done</option></select></div>
             <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Due Date</label><input type="date" value={tForm.dueDate} onChange={e=>setTForm({...tForm,dueDate:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/></div>
+          </div>
+          <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Daily Reminder Time <span className="text-slate-300 font-normal normal-case">(optional)</span></label>
+            <div className="flex items-center gap-2">
+              <input type="time" value={tForm.remindAt||""} onChange={e=>setTForm({...tForm,remindAt:e.target.value})} className="flex-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+              {tForm.remindAt&&<button onClick={()=>setTForm({...tForm,remindAt:""})} className="text-xs text-slate-400 hover:text-slate-600 px-2">Clear</button>}
+            </div>
+            <p className="text-xs text-slate-400 mt-1">Push notification sent daily at this time until task is done</p>
           </div>
           <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Progress — {tForm.progress}%</label><input type="range" min="0" max="100" step="5" value={tForm.progress} onChange={e=>setTForm({...tForm,progress:+e.target.value})} className="w-full accent-violet-600"/></div>
           <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Notes</label><textarea value={tForm.notes} onChange={e=>setTForm({...tForm,notes:e.target.value})} rows={3} placeholder="Context, links, sub-tasks…" className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm resize-none focus:outline-none focus:ring-2 focus:ring-violet-200"/></div>
