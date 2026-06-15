@@ -84,6 +84,11 @@ export default function App() {
   const [impLoad,setIL]  = useState(false);
   const [impRes, setIR]  = useState(null);
 
+  // ── Notifications state ──────────────────────────────────────────────────
+  const [notifPerm, setNotifPerm] = useState(
+    typeof Notification !== "undefined" ? Notification.permission : "denied"
+  );
+
   // ── AI Chat state ────────────────────────────────────────────────────────
   const WELCOME = "Hi! I'm your AI assistant 👋\n\nYou can:\n• Tell me tasks — \"Finish report by Friday\"\n• Save notes — \"Note: meeting moved to 3pm\"\n• Ask questions — \"What are my urgent tasks?\"\n• Draft emails — \"Email team about project delay\"\n• Search the web — \"Find best productivity tips\"";
   const [chatMsgs,    setChatMsgs]    = useState([{role:"ai", text:WELCOME}]);
@@ -108,6 +113,53 @@ export default function App() {
     const unsub = onAuthStateChanged(auth, u => setUser(u ?? null));
     return unsub;
   },[]);
+
+  // ── Notification helpers ─────────────────────────────────────────────────
+  const requestNotifPermission = async () => {
+    if(typeof Notification === "undefined") return;
+    const perm = await Notification.requestPermission();
+    setNotifPerm(perm);
+    if(perm === "granted") showT("🔔 Notifications enabled!");
+  };
+
+  const fireNotif = (title, body, tag) => {
+    if(typeof Notification === "undefined" || Notification.permission !== "granted") return;
+    try { new Notification(title, { body, tag, icon: "/favicon.ico" }); } catch(e) {}
+  };
+
+  // ── Reminder timer: fires at cfg.time each day & on overdue tasks ─────────
+  useEffect(()=>{
+    if(!user || notifPerm !== "granted") return;
+    const check = () => {
+      const now = new Date();
+      const hhmm = `${String(now.getHours()).padStart(2,"0")}:${String(now.getMinutes()).padStart(2,"0")}`;
+      const todayStr = now.toISOString().split("T")[0];
+
+      // Daily reminder at configured time
+      if(hhmm === (cfg.time||"08:00")) {
+        const active = tasks.filter(t=>t.status!=="done");
+        const overdue = active.filter(t=>t.dueDate&&t.dueDate<todayStr);
+        const dueToday = active.filter(t=>t.dueDate===todayStr);
+        const lines = [];
+        if(overdue.length) lines.push(`⚠ ${overdue.length} overdue`);
+        if(dueToday.length) lines.push(`📅 ${dueToday.length} due today`);
+        lines.push(`${active.length} active tasks total`);
+        fireNotif("📋 Daily Reminder", lines.join(" · "), "daily-reminder");
+      }
+
+      // Immediate overdue alert (once per session, on first detect)
+      const overdueNow = tasks.filter(t=>t.dueDate&&t.dueDate<todayStr&&t.status!=="done");
+      if(overdueNow.length && !sessionStorage.getItem("overdue-alerted")) {
+        sessionStorage.setItem("overdue-alerted","1");
+        fireNotif(`⚠ ${overdueNow.length} Overdue Task${overdueNow.length>1?"s":""}`,
+          overdueNow.slice(0,3).map(t=>t.title).join(", ")+(overdueNow.length>3?"…":""),
+          "overdue-alert");
+      }
+    };
+    check(); // run immediately on mount/update
+    const timer = setInterval(check, 60_000); // then every minute
+    return ()=>clearInterval(timer);
+  },[user, notifPerm, tasks, cfg.time]);
 
   // ── Load from Firestore when user signs in ───────────────────────────────
   useEffect(()=>{
@@ -751,6 +803,33 @@ Keep reply friendly and concise.`;
             <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full" referrerPolicy="no-referrer"/>
             <div><p className="text-sm font-semibold text-slate-800">{user.displayName}</p><p className="text-xs text-slate-400">{user.email}</p></div>
           </div>
+          {/* Notifications */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Reminders & Notifications</label>
+            <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl mb-2">
+              <span className="text-xl">🔔</span>
+              <div className="flex-1">
+                <p className="text-sm font-medium text-slate-700">
+                  {notifPerm==="granted"?"Notifications enabled":"Notifications off"}
+                </p>
+                <p className="text-xs text-slate-400">
+                  {notifPerm==="granted"?"You'll get alerts at your reminder time and for overdue tasks":"Enable to get task reminders"}
+                </p>
+              </div>
+              {notifPerm!=="granted"
+                ? <button onClick={requestNotifPermission} className="text-xs font-semibold px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg">Enable</button>
+                : <button onClick={()=>fireNotif("🔔 Test","Reminders are working!","test")} className="text-xs font-semibold px-3 py-1.5 border border-slate-200 text-slate-600 hover:bg-slate-100 rounded-lg">Test</button>
+              }
+            </div>
+            <div className="flex items-center gap-3">
+              <label className="text-xs text-slate-500 flex-1">Daily reminder time</label>
+              <input type="time" value={cfgForm.time||"08:00"} onChange={e=>setCfgForm({...cfgForm,time:e.target.value})}
+                className="px-3 py-1.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+              <button onClick={async()=>{const c={...cfg,...cfgForm};setCfg(c);await saveConfig(c);showT("⏰ Reminder time saved!");setShowCfg(false);}}
+                className="text-xs font-semibold px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-lg">Save</button>
+            </div>
+          </div>
+
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Gemini API Key</label>
             <div className="flex gap-2">
