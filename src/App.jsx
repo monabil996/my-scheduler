@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { signInWithPopup, signOut, onAuthStateChanged } from "firebase/auth";
 import {
-  collection, doc, getDocs, setDoc, deleteDoc, onSnapshot, writeBatch,
+  collection, doc, getDocs, setDoc, deleteDoc, onSnapshot,
 } from "firebase/firestore";
 import { auth, db, provider } from "./firebase";
 
@@ -42,12 +42,12 @@ async function askGemini(prompt, maxTokens = 600) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const [user,    setUser]   = useState(undefined); // undefined = loading
+  const [user,    setUser]   = useState(undefined);
   const [tasks,   setTasks]  = useState([]);
   const [notes,   setNotes]  = useState([]);
   const [cfg,     setCfg]    = useState({time:"08:00"});
   const [lastEmail,setLE]    = useState("");
-  const [tab,     setTab]    = useState("tasks");
+  const [tab,     setTab]    = useState("home");
   const [toast,   setToast]  = useState(null);
   const [brief,   setBrief]  = useState("");
   const [bLoad,   setBLoad]  = useState(false);
@@ -76,8 +76,6 @@ export default function App() {
   // Settings UI
   const [showCfg, setShowCfg] = useState(false);
   const [cfgForm, setCfgForm] = useState({time:"08:00"});
-
-  // AI Key UI
   const [showKey,  setShowKey]  = useState(false);
   const [keyInput, setKeyInput] = useState("");
 
@@ -86,11 +84,24 @@ export default function App() {
   const [impLoad,setIL]  = useState(false);
   const [impRes, setIR]  = useState(null);
 
+  // ── AI Chat state ────────────────────────────────────────────────────────
+  const WELCOME = "Hi! I'm your AI assistant 👋\n\nYou can:\n• Tell me tasks — \"Finish report by Friday\"\n• Save notes — \"Note: meeting moved to 3pm\"\n• Ask questions — \"What are my urgent tasks?\"\n• Draft emails — \"Email team about project delay\"\n• Search the web — \"Find best productivity tips\"";
+  const [chatMsgs,    setChatMsgs]    = useState([{role:"ai", text:WELCOME}]);
+  const [chatInput,   setChatInput]   = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [pendingActions, setPendingActions] = useState([]);
+  const chatEndRef = useRef(null);
+
   // Refs for auto-email
   const cRef  = useRef(cfg);
   const leRef = useRef(lastEmail);
   useEffect(()=>{cRef.current=cfg},[cfg]);
   useEffect(()=>{leRef.current=lastEmail},[lastEmail]);
+
+  // Auto-scroll chat
+  useEffect(()=>{
+    chatEndRef.current?.scrollIntoView({behavior:"smooth"});
+  },[chatMsgs, chatLoading]);
 
   // ── Auth listener ────────────────────────────────────────────────────────
   useEffect(()=>{
@@ -98,26 +109,18 @@ export default function App() {
     return unsub;
   },[]);
 
-  // ── Firestore paths ──────────────────────────────────────────────────────
-  const tasksCol = user ? collection(db, "users", user.uid, "tasks") : null;
-  const notesCol = user ? collection(db, "users", user.uid, "notes") : null;
-  const cfgDoc   = user ? doc(db, "users", user.uid, "settings", "config") : null;
-
   // ── Load from Firestore when user signs in ───────────────────────────────
   useEffect(()=>{
     if(!user) return;
-    // Subscribe to tasks
     const unsubT = onSnapshot(collection(db,"users",user.uid,"tasks"), snap=>{
       setTasks(snap.docs.map(d=>({id:d.id,...d.data()})));
     });
-    // Subscribe to notes
     const unsubN = onSnapshot(collection(db,"users",user.uid,"notes"), snap=>{
       setNotes(snap.docs.map(d=>({id:d.id,...d.data()})));
     });
-    // Load config once
     getDocs(collection(db,"users",user.uid,"settings")).then(snap=>{
-      const cfg = snap.docs.find(d=>d.id==="config")?.data();
-      if(cfg){ setCfg(cfg); setCfgForm(cfg); }
+      const c = snap.docs.find(d=>d.id==="config")?.data();
+      if(c){ setCfg(c); setCfgForm(c); }
     });
     return ()=>{ unsubT(); unsubN(); };
   },[user]);
@@ -196,6 +199,119 @@ export default function App() {
     const n = notes.find(n=>n.id===id); if(!n) return;
     await saveNote({...n, pinned:!n.pinned});
   };
+
+  // ── AI Chat (Gemini) ─────────────────────────────────────────────────────
+  const buildContext = () => {
+    const activeTasks = tasks.filter(t=>t.status!=="done");
+    const doneTasks   = tasks.filter(t=>t.status==="done");
+    const lines = [`Today: ${new Date().toDateString()}`];
+    if(activeTasks.length){
+      lines.push(`\nACTIVE TASKS (${activeTasks.length}):`);
+      activeTasks.forEach(t=>{
+        lines.push(`• [${t.priority.toUpperCase()}] ${t.title} | Category: ${t.category} | Progress: ${t.progress}%${t.dueDate?` | Due: ${t.dueDate}`:""}${t.notes?` | Notes: ${t.notes}`:""}`);
+      });
+    }
+    if(doneTasks.length){
+      lines.push(`\nCOMPLETED TASKS (${doneTasks.length}):`);
+      doneTasks.slice(0,5).forEach(t=>lines.push(`• ${t.title}`));
+    }
+    if(notes.length){
+      lines.push(`\nNOTES (${notes.length}):`);
+      notes.slice(0,20).forEach(n=>{
+        lines.push(`• [${n.category}] ${n.title}${n.pinned?" 📌":""}: ${(n.content||"").slice(0,200)}`);
+      });
+    }
+    return lines.join("\n");
+  };
+
+  const sendChat = async () => {
+    const input = chatInput.trim();
+    if(!input || chatLoading) return;
+    setChatInput("");
+    setChatMsgs(m=>[...m, {role:"user", text:input}]);
+    setChatLoading(true);
+
+    const context = buildContext();
+    const prompt = `You are an AI assistant inside a personal scheduler app. You help the user manage tasks, notes, emails, and find information.
+
+${context}
+
+USER MESSAGE: "${input}"
+
+Analyze the user's message and respond with a JSON object (no markdown, no code fences, just raw JSON):
+{
+  "action": "CHAT|ADD_TASK|ADD_NOTE|ADD_BOTH|EMAIL_DRAFT|SEARCH",
+  "reply": "Your friendly conversational response here",
+  "task": {"title":"","notes":"","category":"Work","priority":"medium","dueDate":""},
+  "note": {"title":"","content":"","category":"Work"},
+  "email": {"to":"","subject":"","body":""},
+  "searchQuery": ""
+}
+
+ACTION RULES:
+- ADD_TASK: user wants to create a to-do, task, or action item
+- ADD_NOTE: user wants to save information, a note, or reference material (not an action)
+- ADD_BOTH: input is both a task and worth saving as a note
+- EMAIL_DRAFT: user wants to write, draft, or send an email
+- SEARCH: user wants to find information from the internet
+- CHAT: general questions about tasks/notes, analysis, or conversation
+
+For ADD_TASK: fill in task object. Priority: urgent/high/medium/low. Category: ${TCATS.join("/")}. dueDate: YYYY-MM-DD or empty.
+For ADD_NOTE: fill in note object. Category: ${NCATS.join("/")}.
+For EMAIL_DRAFT: fill in email object with to, subject, body.
+For SEARCH: fill searchQuery with best search terms.
+For CHAT: provide a helpful reply using the context above.
+
+Keep reply friendly and concise.`;
+
+    try {
+      const raw = await askGemini(prompt, 1000);
+      let parsed;
+      try {
+        const clean = raw.replace(/```json|```/g,"").trim();
+        parsed = JSON.parse(clean);
+      } catch {
+        parsed = { action:"CHAT", reply: raw };
+      }
+
+      const aiMsg = {
+        role:"ai",
+        text: parsed.reply || "Done!",
+        action: parsed.action,
+        task: parsed.task,
+        note: parsed.note,
+        email: parsed.email,
+        searchQuery: parsed.searchQuery,
+        msgId: uid(),
+      };
+      setChatMsgs(m=>[...m, aiMsg]);
+
+      if(parsed.action==="ADD_TASK"||parsed.action==="ADD_BOTH"){
+        setPendingActions(pa=>[...pa, {type:"task", data:parsed.task, id:uid()}]);
+      }
+      if(parsed.action==="ADD_NOTE"||parsed.action==="ADD_BOTH"){
+        setPendingActions(pa=>[...pa, {type:"note", data:parsed.note, id:uid()}]);
+      }
+    } catch(e) {
+      setChatMsgs(m=>[...m, {role:"ai", text:"⚠️ AI error. Check your Gemini API key in Settings (⚙️)."}]);
+    }
+    setChatLoading(false);
+  };
+
+  const confirmPending = async (pending) => {
+    if(pending.type==="task"){
+      const t = {...BLANK_T, ...pending.data, id:uid(), dateAdded:new Date().toISOString(), completedAt:null};
+      await saveTask(t);
+      showT(`✅ Task added: "${t.title}"`);
+    } else if(pending.type==="note"){
+      const n = {...BLANK_N, ...pending.data, id:uid(), dateCreated:new Date().toISOString(), dateModified:new Date().toISOString()};
+      await saveNote(n);
+      showT(`📓 Note saved: "${n.title}"`);
+    }
+    setPendingActions(pa=>pa.filter(p=>p.id!==pending.id));
+  };
+
+  const dismissPending = (id) => setPendingActions(pa=>pa.filter(p=>p.id!==id));
 
   // ── Report builder ───────────────────────────────────────────────────────
   const buildReport = useCallback(()=>{
@@ -311,7 +427,7 @@ export default function App() {
       <div className="bg-white rounded-3xl shadow-xl p-10 max-w-sm w-full text-center">
         <div className="text-5xl mb-4">📋</div>
         <h1 className="text-2xl font-bold text-slate-800 mb-2">My Scheduler</h1>
-        <p className="text-slate-400 text-sm mb-8">Tasks · Notes · AI Summaries</p>
+        <p className="text-slate-400 text-sm mb-8">Tasks · Notes · AI Assistant</p>
         <button
           onClick={()=>signInWithPopup(auth,provider).catch(()=>{})}
           className="w-full flex items-center justify-center gap-3 bg-white border-2 border-slate-200 hover:border-violet-400 hover:bg-violet-50 text-slate-700 font-semibold rounded-2xl px-6 py-3.5 transition-all shadow-sm"
@@ -360,13 +476,127 @@ export default function App() {
     {/* Tabs */}
     <div className="bg-white border-b border-slate-200 px-4">
       <div className="max-w-3xl mx-auto flex overflow-x-auto">
-        {[{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"daily",l:"☀️ Daily"},{id:"import",l:"✨ Import"}].map(t=>(
+        {[{id:"home",l:"🤖 AI"},{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"daily",l:"☀️ Daily"},{id:"import",l:"✨ Import"}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab===t.id?"border-violet-600 text-violet-700":"border-transparent text-slate-500 hover:text-slate-700"}`}>{t.l}</button>
         ))}
       </div>
     </div>
 
     <main className="max-w-3xl mx-auto px-4 py-5">
+
+      {/* ── HOME / AI CHAT ── */}
+      {tab==="home"&&(
+        <div className="flex flex-col" style={{height:"calc(100vh - 130px)"}}>
+
+          {/* Stats bar */}
+          <div className="flex gap-2 mb-3 flex-wrap">
+            <button onClick={()=>setTab("tasks")} className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-slate-600 hover:border-violet-300 hover:text-violet-700 transition-colors">
+              <span className="font-bold text-slate-800">{tasks.filter(t=>t.status!=="done").length}</span> active tasks
+            </button>
+            {tasks.filter(t=>t.dueDate&&t.dueDate<today()&&t.status!=="done").length>0&&(
+              <button onClick={()=>setTab("tasks")} className="flex items-center gap-1.5 text-xs bg-red-50 border border-red-200 rounded-xl px-3 py-1.5 text-red-700 hover:bg-red-100 transition-colors">
+                ⚠ <span className="font-bold">{tasks.filter(t=>t.dueDate&&t.dueDate<today()&&t.status!=="done").length}</span> overdue
+              </button>
+            )}
+            <button onClick={()=>setTab("notes")} className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-slate-600 hover:border-violet-300 hover:text-violet-700 transition-colors">
+              <span className="font-bold text-slate-800">{notes.length}</span> notes
+            </button>
+            <button onClick={()=>{setChatMsgs([{role:"ai",text:WELCOME}]);setPendingActions([]);}} className="ml-auto text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5">Clear</button>
+          </div>
+
+          {/* Pending action banners */}
+          {pendingActions.length>0&&(
+            <div className="mb-3 space-y-2">
+              {pendingActions.map(pa=>(
+                <div key={pa.id} className={`flex items-center gap-3 p-3 rounded-xl border ${pa.type==="task"?"bg-violet-50 border-violet-200":"bg-amber-50 border-amber-200"}`}>
+                  <span className="text-lg">{pa.type==="task"?"📝":"📓"}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{pa.type==="task"?"Add Task":"Save Note"}</p>
+                    <p className="text-sm font-medium text-slate-800 truncate">{pa.data?.title}</p>
+                    {pa.type==="task"&&pa.data?.priority&&<p className="text-xs text-slate-500">{pc(pa.data.priority).label} · {pa.data?.category||"Work"}</p>}
+                  </div>
+                  <button onClick={()=>confirmPending(pa)} className={`text-xs font-semibold px-3 py-1.5 rounded-lg text-white ${pa.type==="task"?"bg-violet-600 hover:bg-violet-700":"bg-amber-500 hover:bg-amber-600"}`}>✓ Add</button>
+                  <button onClick={()=>dismissPending(pa.id)} className="text-xs px-2 py-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100">✕</button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Chat messages */}
+          <div className="flex-1 overflow-y-auto space-y-3 pb-3 pr-1">
+            {chatMsgs.map((msg,i)=>(
+              <div key={i} className={`flex ${msg.role==="user"?"justify-end":"justify-start"}`}>
+                <div className={`max-w-[85%] ${msg.role==="ai"?"flex items-start gap-2":""}`}>
+                  {msg.role==="ai"&&<div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center text-sm flex-shrink-0 mt-0.5">🤖</div>}
+                  <div>
+                    <div className={`px-4 py-3 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                      msg.role==="user"
+                        ?"bg-violet-600 text-white rounded-br-sm"
+                        :"bg-white border border-slate-200 text-slate-800 rounded-bl-sm shadow-sm"
+                    }`}>{msg.text}</div>
+                    {msg.role==="ai"&&msg.action==="SEARCH"&&msg.searchQuery&&(
+                      <a href={`https://www.google.com/search?q=${encodeURIComponent(msg.searchQuery)}`} target="_blank" rel="noreferrer"
+                        className="mt-1.5 inline-flex items-center gap-1.5 text-xs bg-blue-50 border border-blue-200 text-blue-700 px-3 py-1.5 rounded-lg hover:bg-blue-100 transition-colors">
+                        🔍 Search: "{msg.searchQuery}"
+                      </a>
+                    )}
+                    {msg.role==="ai"&&msg.action==="EMAIL_DRAFT"&&msg.email&&(
+                      <a href={`mailto:${encodeURIComponent(msg.email.to||"")}?subject=${encodeURIComponent(msg.email.subject||"")}&body=${encodeURIComponent(msg.email.body||"")}`}
+                        className="mt-1.5 inline-flex items-center gap-1.5 text-xs bg-emerald-50 border border-emerald-200 text-emerald-700 px-3 py-1.5 rounded-lg hover:bg-emerald-100 transition-colors">
+                        📧 Open in email app
+                      </a>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {chatLoading&&(
+              <div className="flex justify-start">
+                <div className="flex items-start gap-2">
+                  <div className="w-7 h-7 rounded-full bg-violet-100 flex items-center justify-center text-sm flex-shrink-0">🤖</div>
+                  <div className="bg-white border border-slate-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm">
+                    <div className="flex gap-1">
+                      <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:"0ms"}}/>
+                      <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:"150ms"}}/>
+                      <span className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{animationDelay:"300ms"}}/>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            <div ref={chatEndRef}/>
+          </div>
+
+          {/* Quick suggestion chips (only show at start) */}
+          {chatMsgs.length<=1&&(
+            <div className="flex flex-wrap gap-2 mb-3">
+              {["What are my urgent tasks?","Summarize my notes","Add task: Review emails","Email boss about status"].map(s=>(
+                <button key={s} onClick={()=>setChatInput(s)} className="text-xs bg-white border border-slate-200 rounded-full px-3 py-1.5 text-slate-600 hover:border-violet-300 hover:text-violet-700 transition-colors">{s}</button>
+              ))}
+            </div>
+          )}
+
+          {/* Input */}
+          <div className="bg-white border border-slate-200 rounded-2xl shadow-sm flex items-end gap-2 p-3">
+            <textarea
+              value={chatInput}
+              onChange={e=>setChatInput(e.target.value)}
+              onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendChat();}}}
+              placeholder="Ask me anything, add a task, save a note, draft an email…"
+              rows={1}
+              style={{resize:"none",minHeight:"36px",maxHeight:"120px",overflowY:"auto"}}
+              className="flex-1 text-sm text-slate-800 focus:outline-none placeholder-slate-400 leading-relaxed bg-transparent"
+              onInput={e=>{e.target.style.height="auto";e.target.style.height=e.target.scrollHeight+"px";}}
+            />
+            <button onClick={sendChat} disabled={!chatInput.trim()||chatLoading}
+              className="bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-xl w-9 h-9 flex items-center justify-center flex-shrink-0 transition-colors">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── TASKS ── */}
       {tab==="tasks"&&<>
