@@ -5,6 +5,9 @@ import {
 } from "firebase/firestore";
 import { auth, db, provider } from "./firebase";
 
+// ─── Runtime Gemini key (can be overridden in Settings UI) ───────────────────
+let runtimeGeminiKey = localStorage.getItem("gemini_key") || "";
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 const PRI = [
   { id:"urgent", label:"🔴 Urgent", bar:"border-l-red-500",    badge:"bg-red-100 text-red-700",      dot:"bg-red-500"     },
@@ -33,11 +36,15 @@ function urlBase64ToUint8Array(b64) {
 }
 
 // ─── Gemini API helper ────────────────────────────────────────────────────────
-const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`;
+const GEMINI_KEY_ENV = import.meta.env.VITE_GEMINI_API_KEY || "";
+
+function getGeminiUrl() {
+  const key = runtimeGeminiKey || GEMINI_KEY_ENV;
+  return `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${key}`;
+}
 
 async function askGemini(prompt, maxTokens = 600) {
-  const res = await fetch(GEMINI_URL, {
+  const res = await fetch(getGeminiUrl(), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -87,7 +94,7 @@ export default function App() {
   const [showCfg, setShowCfg] = useState(false);
   const [cfgForm, setCfgForm] = useState({time:"08:00"});
   const [showKey,  setShowKey]  = useState(false);
-  const [keyInput, setKeyInput] = useState("");
+  const [keyInput, setKeyInput] = useState(runtimeGeminiKey||"");
 
   // Import
   const [impTxt, setIT]  = useState("");
@@ -286,8 +293,13 @@ export default function App() {
     closeTF();
   };
   const saveT = async () => {
-    const updated = tasks.map(t=>t.id===editTid?{...t,...tForm}:t).find(t=>t.id===editTid);
-    if(updated) await saveTask(updated);
+    const orig = tasks.find(t=>t.id===editTid); if(!orig) return;
+    const merged = {...orig, ...tForm};
+    // Fix completedAt when status changes to/from done via form
+    if(merged.status==="done" && !merged.completedAt) merged.completedAt = new Date().toISOString();
+    if(merged.status!=="done") merged.completedAt = null;
+    if(merged.status==="done") merged.progress = 100;
+    await saveTask(merged);
     closeTF();
   };
   const delT = async id => {
@@ -526,7 +538,7 @@ Keep reply friendly and concise.`;
     })
     .filter(n=>{
       if(nCat!=="all"&&n.category!==nCat) return false;
-      if(nSearch){const q=nSearch.toLowerCase();if(!n.title.toLowerCase().includes(q)&&!n.content.toLowerCase().includes(q)) return false;}
+      if(nSearch){const q=nSearch.toLowerCase();if(!n.title.toLowerCase().includes(q)&&!(n.content||"").toLowerCase().includes(q)) return false;}
       return true;
     });
 
@@ -557,7 +569,11 @@ Keep reply friendly and concise.`;
         <h1 className="text-2xl font-bold text-slate-800 mb-2">My Scheduler</h1>
         <p className="text-slate-400 text-sm mb-8">Tasks · Notes · AI Assistant</p>
         <button
-          onClick={()=>signInWithPopup(auth,provider).catch(()=>{})}
+          onClick={()=>signInWithPopup(auth,provider).catch(e=>{
+            if(e.code==="auth/popup-blocked"||e.code==="auth/popup-closed-by-user") {
+              alert("Popup blocked. Please allow popups for this site and try again.");
+            }
+          })}
           className="w-full flex items-center justify-center gap-3 bg-white border-2 border-slate-200 hover:border-violet-400 hover:bg-violet-50 text-slate-700 font-semibold rounded-2xl px-6 py-3.5 transition-all shadow-sm"
         >
           <svg className="w-5 h-5" viewBox="0 0 24 24">
@@ -584,7 +600,7 @@ Keep reply friendly and concise.`;
     <header className="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm px-4 py-3">
       <div className="max-w-3xl mx-auto flex items-center justify-between gap-2">
         <div className="flex items-center gap-3">
-          <img src={user.photoURL} alt="" className="w-8 h-8 rounded-full hidden sm:block" referrerPolicy="no-referrer"/>
+          {user.photoURL&&<img src={user.photoURL} alt="" className="w-8 h-8 rounded-full hidden sm:block" referrerPolicy="no-referrer"/>}
           <div>
             <h1 className="text-lg font-bold text-slate-900">📋 My Scheduler</h1>
             <p className="text-xs text-slate-400">{new Date().toDateString()}</p>
@@ -955,7 +971,10 @@ Keep reply friendly and concise.`;
         <div className="p-5 border-b border-slate-100 flex justify-between"><h2 className="text-base font-bold">⚙️ Settings</h2><button onClick={()=>setShowCfg(false)} className="text-slate-400 text-xl">×</button></div>
         <div className="p-5 space-y-5">
           <div className="flex items-center gap-3 p-3 bg-slate-50 rounded-xl">
-            <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full" referrerPolicy="no-referrer"/>
+            {user.photoURL
+              ? <img src={user.photoURL} alt="" className="w-10 h-10 rounded-full" referrerPolicy="no-referrer"/>
+              : <div className="w-10 h-10 rounded-full bg-violet-100 flex items-center justify-center text-lg font-bold text-violet-600">{(user.displayName||user.email||"?")[0].toUpperCase()}</div>
+            }
             <div><p className="text-sm font-semibold text-slate-800">{user.displayName}</p><p className="text-xs text-slate-400">{user.email}</p></div>
           </div>
           {/* Notifications */}
@@ -988,10 +1007,13 @@ Keep reply friendly and concise.`;
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Gemini API Key</label>
             <div className="flex gap-2">
-              <input type={showKey?"text":"password"} value={keyInput||import.meta.env.VITE_GEMINI_API_KEY||""} onChange={e=>setKeyInput(e.target.value)} placeholder="AIza…" className="flex-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+              <input type={showKey?"text":"password"} value={keyInput||(runtimeGeminiKey||GEMINI_KEY_ENV)} onChange={e=>setKeyInput(e.target.value)} placeholder="AQ.… or AIza…" className="flex-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200"/>
               <button onClick={()=>setShowKey(s=>!s)} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:bg-slate-50">{showKey?"Hide":"Show"}</button>
             </div>
-            <p className="text-xs text-slate-400 mt-1">Get yours free at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">aistudio.google.com</a></p>
+            <div className="flex items-center justify-between mt-1.5">
+              <p className="text-xs text-slate-400">Get yours free at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">aistudio.google.com</a></p>
+              <button onClick={()=>{if(keyInput.trim()){runtimeGeminiKey=keyInput.trim();localStorage.setItem("gemini_key",keyInput.trim());showT("🔑 Gemini key saved!");setShowCfg(false);}}} disabled={!keyInput.trim()} className="text-xs font-semibold px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-lg">Save Key</button>
+            </div>
           </div>
         </div>
         <div className="p-5 border-t border-slate-100 flex justify-between items-center">
