@@ -5,8 +5,9 @@ import {
 } from "firebase/firestore";
 import { auth, db, provider } from "./firebase";
 
-// ─── Runtime Gemini key (can be overridden in Settings UI) ───────────────────
+// ─── Runtime AI keys (can be overridden in Settings UI) ──────────────────────
 let runtimeGeminiKey = localStorage.getItem("gemini_key") || "";
+let runtimeClaudeKey = localStorage.getItem("claude_key") || "";
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const PRI = [
@@ -57,6 +58,17 @@ async function askGemini(prompt, maxTokens = 600) {
   return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
 }
 
+async function askClaude(prompt, maxTokens = 600) {
+  const res = await fetch("/api/claude", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt, apiKey: runtimeClaudeKey, maxTokens }),
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `Claude error ${res.status}`);
+  return data.text ?? "";
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [user,    setUser]   = useState(undefined);
@@ -95,6 +107,11 @@ export default function App() {
   const [cfgForm, setCfgForm] = useState({time:"08:00"});
   const [showKey,  setShowKey]  = useState(false);
   const [keyInput, setKeyInput] = useState(runtimeGeminiKey||"");
+  const [claudeKeyInput, setClaudeKeyInput] = useState(runtimeClaudeKey||"");
+  const [showClaudeKey, setShowClaudeKey] = useState(false);
+
+  // AI provider
+  const [aiProvider, setAiProvider] = useState(localStorage.getItem("ai_provider")||"gemini");
 
   // Import
   const [impTxt, setIT]  = useState("");
@@ -405,7 +422,7 @@ For CHAT: provide a helpful reply using the context above.
 Keep reply friendly and concise.`;
 
     try {
-      const raw = await askGemini(prompt, 1000);
+      const raw = await (aiProvider==="claude" ? askClaude(prompt,1000) : askGemini(prompt, 1000));
       let parsed;
       try {
         const clean = raw.replace(/```json|```/g,"").trim();
@@ -433,7 +450,7 @@ Keep reply friendly and concise.`;
         setPendingActions(pa=>[...pa, {type:"note", data:parsed.note, id:uid()}]);
       }
     } catch(e) {
-      setChatMsgs(m=>[...m, {role:"ai", text:"⚠️ AI error. Check your Gemini API key in Settings (⚙️)."}]);
+      setChatMsgs(m=>[...m, {role:"ai", text:`⚠️ AI error. Check your ${aiProvider==="claude"?"Claude":"Gemini"} API key in Settings (⚙️).`}]);
     }
     setChatLoading(false);
   };
@@ -478,10 +495,10 @@ Keep reply friendly and concise.`;
     const active = tasks.filter(t=>t.status!=="done");
     const prompt = `Today: ${new Date().toDateString()}. Write a focused daily brief.\n\n${active.map(t=>`• [${t.priority.toUpperCase()}] ${t.title} (${t.category}) ${t.progress}%${t.dueDate?` due ${t.dueDate}`:""}${t.notes?` — ${t.notes}`:""}`).join("\n")}\n\nSections: 🔥 Top 3 Focus | ⚡ Quick Wins | 📅 Urgent/Overdue | 💬 Motivation. Under 200 words.`;
     try {
-      const text = await askGemini(prompt, 600);
+      const text = await (aiProvider==="claude" ? askClaude(prompt,600) : askGemini(prompt, 600));
       setBrief(text);
     } catch(e) {
-      setBrief("⚠ Error calling Gemini. Check your API key in Settings.");
+      setBrief("⚠ AI error. Check your API key in Settings (⚙).");
     }
     setBLoad(false);
   };
@@ -491,7 +508,7 @@ Keep reply friendly and concise.`;
     if(!impTxt.trim()) return; setIL(true); setIR(null);
     const prompt = `Parse these notes into tasks. Return ONLY a valid JSON array, no markdown fences, no explanation:\n[{"title":"","notes":"","category":"Work","priority":"medium","dueDate":""}]\nPriority values: urgent/high/medium/low. Category values: ${TCATS.join("/")}\n\nNotes:\n${impTxt}`;
     try {
-      const raw  = await askGemini(prompt, 2000);
+      const raw  = await (aiProvider==="claude" ? askClaude(prompt,2000) : askGemini(prompt, 2000));
       const clean = raw.replace(/```json|```/g,"").trim();
       const p    = JSON.parse(clean);
       setIR(Array.isArray(p)?p:"error");
@@ -645,7 +662,14 @@ Keep reply friendly and concise.`;
             <button onClick={()=>setTab("notes")} className="flex items-center gap-1.5 text-xs bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-slate-600 hover:border-violet-300 hover:text-violet-700 transition-colors">
               <span className="font-bold text-slate-800">{notes.length}</span> notes
             </button>
-            <button onClick={()=>{setChatMsgs([{role:"ai",text:WELCOME}]);setPendingActions([]);}} className="ml-auto text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5">Clear</button>
+            <div className="ml-auto flex items-center gap-2">
+              {/* AI Provider toggle */}
+              <div className="flex rounded-lg border border-slate-200 overflow-hidden text-xs font-medium">
+                <button onClick={()=>{setAiProvider("gemini");localStorage.setItem("ai_provider","gemini");}} className={`px-2.5 py-1 transition-colors ${aiProvider==="gemini"?"bg-violet-600 text-white":"bg-white text-slate-500 hover:bg-slate-50"}`}>✦ Gemini</button>
+                <button onClick={()=>{setAiProvider("claude");localStorage.setItem("ai_provider","claude");}} className={`px-2.5 py-1 transition-colors border-l border-slate-200 ${aiProvider==="claude"?"bg-violet-600 text-white":"bg-white text-slate-500 hover:bg-slate-50"}`}>◆ Claude</button>
+              </div>
+              <button onClick={()=>{setChatMsgs([{role:"ai",text:WELCOME}]);setPendingActions([]);}} className="text-xs text-slate-400 hover:text-slate-600 px-2 py-1.5">Clear</button>
+            </div>
           </div>
 
           {/* Pending action banners */}
@@ -1004,15 +1028,29 @@ Keep reply friendly and concise.`;
             </div>
           </div>
 
+          {/* Gemini key */}
           <div>
-            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Gemini API Key</label>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">✦ Gemini API Key</label>
             <div className="flex gap-2">
               <input type={showKey?"text":"password"} value={keyInput||(runtimeGeminiKey||GEMINI_KEY_ENV)} onChange={e=>setKeyInput(e.target.value)} placeholder="AQ.… or AIza…" className="flex-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200"/>
               <button onClick={()=>setShowKey(s=>!s)} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:bg-slate-50">{showKey?"Hide":"Show"}</button>
             </div>
             <div className="flex items-center justify-between mt-1.5">
-              <p className="text-xs text-slate-400">Get yours free at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">aistudio.google.com</a></p>
+              <p className="text-xs text-slate-400">Free at <a href="https://aistudio.google.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">aistudio.google.com</a></p>
               <button onClick={()=>{if(keyInput.trim()){runtimeGeminiKey=keyInput.trim();localStorage.setItem("gemini_key",keyInput.trim());showT("🔑 Gemini key saved!");setShowCfg(false);}}} disabled={!keyInput.trim()} className="text-xs font-semibold px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-lg">Save Key</button>
+            </div>
+          </div>
+
+          {/* Claude key */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">◆ Claude API Key</label>
+            <div className="flex gap-2">
+              <input type={showClaudeKey?"text":"password"} value={claudeKeyInput} onChange={e=>setClaudeKeyInput(e.target.value)} placeholder="sk-ant-…" className="flex-1 px-3 py-2.5 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+              <button onClick={()=>setShowClaudeKey(s=>!s)} className="px-3 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-500 hover:bg-slate-50">{showClaudeKey?"Hide":"Show"}</button>
+            </div>
+            <div className="flex items-center justify-between mt-1.5">
+              <p className="text-xs text-slate-400">Get yours at <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">console.anthropic.com</a></p>
+              <button onClick={()=>{if(claudeKeyInput.trim()){runtimeClaudeKey=claudeKeyInput.trim();localStorage.setItem("claude_key",claudeKeyInput.trim());showT("🔑 Claude key saved!");setShowCfg(false);}}} disabled={!claudeKeyInput.trim()} className="text-xs font-semibold px-3 py-1.5 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-lg">Save Key</button>
             </div>
           </div>
         </div>
