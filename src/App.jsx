@@ -41,7 +41,7 @@ const GEMINI_KEY_ENV = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 function getGeminiUrl() {
   const key = runtimeGeminiKey || GEMINI_KEY_ENV;
-  return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key}`;
+  return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 }
 
 async function askGemini(prompt, maxTokens = 600) {
