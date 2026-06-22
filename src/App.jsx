@@ -16,15 +16,20 @@ const PRI = [
   { id:"medium", label:"🟡 Medium", bar:"border-l-amber-400",  badge:"bg-amber-100 text-amber-700",   dot:"bg-amber-400"   },
   { id:"low",    label:"🟢 Low",    bar:"border-l-emerald-400",badge:"bg-emerald-100 text-emerald-700",dot:"bg-emerald-400"},
 ];
-const TCATS = ["Work","Personal","Ideas","Research","Meeting","Learning","Other"];
+const DEFAULT_TCATS = ["Work","Personal","Ideas","Research","Meeting","Learning","Other"];
 const NCATS = ["Work","Personal","Ideas","Reference","Meeting","Research","Journal","Other"];
-const BLANK_T = {title:"",notes:"",category:"Work",priority:"medium",status:"todo",progress:0,dueDate:"",remindAt:""};
+const BLANK_T = {title:"",notes:"",category:"Work",priority:"medium",status:"todo",progress:0,dueDate:"",remindAt:"",subtasks:[]};
 const BLANK_N = {title:"",content:"",category:"Work",pinned:false};
 
 const pc   = id => PRI.find(p=>p.id===id)||PRI[2];
 const fmt  = iso => iso ? new Date(iso).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "";
 const uid  = () => Date.now().toString(36)+Math.random().toString(36).slice(2);
 const today= () => new Date().toISOString().split("T")[0];
+const calcDuration = (dateAdded, dueDate) => {
+  if(!dateAdded || !dueDate) return null;
+  const days = Math.round((new Date(dueDate+"T00:00:00") - new Date(dateAdded)) / 86400000);
+  return days < 0 ? null : days === 0 ? "same day" : days === 1 ? "1 day" : `${days} days`;
+};
 
 // ─── VAPID push helper ────────────────────────────────────────────────────────
 const VAPID_PUB = import.meta.env.VITE_VAPID_PUBLIC_KEY ||
@@ -112,6 +117,14 @@ export default function App() {
 
   // AI provider
   const [aiProvider, setAiProvider] = useState(localStorage.getItem("ai_provider")||"gemini");
+
+  // Dynamic task categories
+  const [taskCats,    setTaskCats]    = useState(DEFAULT_TCATS);
+  const [newCatInput, setNewCatInput] = useState("");
+
+  // Subtask inline input
+  const [newSubInput,    setNewSubInput]    = useState({});
+  const [newSubSubInput, setNewSubSubInput] = useState({});
 
   // Import
   const [impTxt, setIT]  = useState("");
@@ -273,6 +286,8 @@ export default function App() {
     getDocs(collection(db,"users",user.uid,"settings")).then(snap=>{
       const c = snap.docs.find(d=>d.id==="config")?.data();
       if(c){ setCfg(c); setCfgForm(c); }
+      const cats = snap.docs.find(d=>d.id==="taskCategories")?.data()?.list;
+      if(cats?.length) setTaskCats(cats);
     });
     return ()=>{ unsubT(); unsubN(); };
   },[user]);
@@ -303,6 +318,61 @@ export default function App() {
     await setDoc(doc(db,"users",user.uid,"settings","config"), c);
   };
 
+  const saveCats = async cats => {
+    if(!user) return;
+    await setDoc(doc(db,"users",user.uid,"settings","taskCategories"), {list: cats});
+  };
+  const addCat = async () => {
+    const name = newCatInput.trim();
+    if(!name || taskCats.includes(name)) return;
+    const updated = [...taskCats, name];
+    setTaskCats(updated); setNewCatInput(""); await saveCats(updated);
+  };
+  const deleteCat = async cat => {
+    const updated = taskCats.filter(c=>c!==cat);
+    setTaskCats(updated); await saveCats(updated);
+  };
+  // ── Subtask CRUD
+  const addSubtask = async (taskId, title) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task||!title.trim()) return;
+    const sub = {id:uid(), title:title.trim(), done:false, subtasks:[]};
+    await saveTask({...task, subtasks:[...(task.subtasks||[]), sub]});
+    setNewSubInput(p=>({...p,[taskId]:""}));
+  };
+  const toggleSubtask = async (taskId, subtaskId) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId?{...s,done:!s.done}:s);
+    const doneCount = subs.filter(s=>s.done).length;
+    const prog = subs.length ? Math.round(doneCount/subs.length*100) : task.progress;
+    const status = prog===100?"done":prog>0?"inprogress":"todo";
+    await saveTask({...task, subtasks:subs, progress:prog, status, completedAt:status==="done"?new Date().toISOString():null});
+  };
+  const deleteSubtask = async (taskId, subtaskId) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    await saveTask({...task, subtasks:(task.subtasks||[]).filter(s=>s.id!==subtaskId)});
+  };
+  const addSubSubtask = async (taskId, subtaskId, title) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task||!title.trim()) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId
+      ? {...s, subtasks:[...(s.subtasks||[]), {id:uid(), title:title.trim(), done:false}]}
+      : s);
+    await saveTask({...task, subtasks:subs});
+    setNewSubSubInput(p=>({...p,[subtaskId]:""}));
+  };
+  const toggleSubSubtask = async (taskId, subtaskId, subId) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId
+      ? {...s, subtasks:(s.subtasks||[]).map(ss=>ss.id===subId?{...ss,done:!ss.done}:ss)}
+      : s);
+    await saveTask({...task, subtasks:subs});
+  };
+  const deleteSubSubtask = async (taskId, subtaskId, subId) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId
+      ? {...s, subtasks:(s.subtasks||[]).filter(ss=>ss.id!==subId)}
+      : s);
+    await saveTask({...task, subtasks:subs});
+  };
   // ── Tasks CRUD ───────────────────────────────────────────────────────────
   const addT = async () => {
     const t = {...tForm, id:uid(), dateAdded:new Date().toISOString(), completedAt:null};
