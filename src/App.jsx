@@ -772,7 +772,7 @@ Keep reply friendly and concise.`;
           <input value={tSearch} onChange={e=>setTS(e.target.value)} placeholder="Search…" className="flex-1 min-w-32 px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"/>
           <select value={fStat} onChange={e=>setFStat(e.target.value)} className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="active">Active</option><option value="done">Done</option><option value="all">All</option></select>
           <select value={fPri}  onChange={e=>setFPri(e.target.value)}  className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="all">All Priorities</option>{PRI.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select>
-          <select value={fCat}  onChange={e=>setFCat(e.target.value)}  className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="all">All Categories</option>{TCATS.map(c=><option key={c} value={c}>{c}</option>)}</select>
+          <select value={fCat}  onChange={e=>setFCat(e.target.value)}  className="px-3 py-2 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="all">All Categories</option>{taskCats.map(c=><option key={c} value={c}>{c}</option>)}</select>
         </div>
         {visTasks.length===0?(
           <div className="text-center py-20"><p className="text-5xl mb-3">{tasks.length===0?"🗒️":"🔍"}</p><p className="text-slate-400 text-sm">{tasks.length===0?"No tasks yet — tap + Task":"No tasks match filters"}</p></div>
@@ -798,8 +798,9 @@ Keep reply friendly and concise.`;
                         </div>
                       </div>
                       <div className="flex flex-wrap gap-2 mt-1 text-xs text-slate-400">
-                        <span>Added {fmt(task.dateAdded)}</span>
-                        {task.dueDate&&<span className={ov?"text-red-500 font-medium":""}>{ov?"⚠ Overdue · ":"Due "}{fmt(task.dueDate+"T00:00:00")}</span>}
+                        {task.dateAdded&&<span>📅 Added {fmt(task.dateAdded)}</span>}
+                        {task.dueDate&&<span className={ov?"text-red-500 font-medium":""}>{ov?"⚠ Overdue · Due ":"Due "}{fmt(task.dueDate+"T00:00:00")}</span>}
+                        {task.dateAdded&&task.dueDate&&calcDuration(task.dateAdded,task.dueDate)&&<span>⏱ {calcDuration(task.dateAdded,task.dueDate)}</span>}
                         {done&&task.completedAt&&<span className="text-emerald-500">✓ Done {fmt(task.completedAt)}</span>}
                       </div>
                       <div className="flex items-center gap-2 mt-2">
@@ -809,10 +810,41 @@ Keep reply friendly and concise.`;
                     </div>
                   </div>
                 </div>
-                {exp&&<div className="border-t border-slate-100 bg-slate-50 rounded-b-2xl px-4 py-4">
-                  {task.notes?<><p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Notes</p><p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap mb-4">{task.notes}</p></>:<p className="text-xs text-slate-400 italic mb-4">No notes.</p>}
-                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Progress · {task.progress}%</p>
-                  <input type="range" min="0" max="100" step="5" value={task.progress} onChange={e=>setProg(task.id,+e.target.value)} className="w-full accent-violet-600"/>
+                {exp&&<div className="border-t border-slate-100 bg-slate-50 rounded-b-2xl px-4 py-4 space-y-4">
+                  {task.notes&&<div><p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Notes</p><p className="text-sm text-slate-700 leading-relaxed whitespace-pre-wrap">{task.notes}</p></div>}
+                  <div>
+                    <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Subtasks {(task.subtasks||[]).length>0&&<span className="normal-case font-normal">({(task.subtasks||[]).filter(s=>s.done).length}/{(task.subtasks||[]).length})</span>}</p>
+                    <div className="space-y-1 mb-2">
+                      {(task.subtasks||[]).map(sub=>(
+                        <div key={sub.id}>
+                          <div className="flex items-center gap-2 py-1 group/sub">
+                            <button onClick={()=>toggleSubtask(task.id,sub.id)} className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center text-[10px] transition-all ${sub.done?"bg-emerald-500 border-emerald-500 text-white":"border-slate-300 hover:border-violet-400"}`}>{sub.done?"✓":""}</button>
+                            <span className={`flex-1 text-sm ${sub.done?"line-through text-slate-400":"text-slate-700"}`}>{sub.title}</span>
+                            <button onClick={()=>deleteSubtask(task.id,sub.id)} className="opacity-0 group-hover/sub:opacity-100 text-xs text-slate-300 hover:text-red-500 transition-opacity px-1">✕</button>
+                          </div>
+                          <div className="ml-6 space-y-0.5">
+                            {(sub.subtasks||[]).map(ss=>(
+                              <div key={ss.id} className="flex items-center gap-2 py-0.5 group/ss">
+                                <button onClick={()=>toggleSubSubtask(task.id,sub.id,ss.id)} className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[9px] transition-all ${ss.done?"bg-violet-400 border-violet-400 text-white":"border-slate-300 hover:border-violet-400"}`}>{ss.done?"✓":""}</button>
+                                <span className={`flex-1 text-xs ${ss.done?"line-through text-slate-400":"text-slate-600"}`}>{ss.title}</span>
+                                <button onClick={()=>deleteSubSubtask(task.id,sub.id,ss.id)} className="opacity-0 group-hover/ss:opacity-100 text-[10px] text-slate-300 hover:text-red-500 transition-opacity px-1">✕</button>
+                              </div>
+                            ))}
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <input value={newSubSubInput[sub.id]||""} onChange={e=>setNewSubSubInput(p=>({...p,[sub.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubSubtask(task.id,sub.id,newSubSubInput[sub.id]||"")} placeholder="+ sub-subtask…" className="flex-1 text-xs px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300 bg-white"/>
+                              <button onClick={()=>addSubSubtask(task.id,sub.id,newSubSubInput[sub.id]||"")} disabled={!(newSubSubInput[sub.id]||"").trim()} className="text-xs px-2 py-1 bg-violet-100 hover:bg-violet-200 text-violet-700 rounded-lg disabled:opacity-40">Add</button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input value={newSubInput[task.id]||""} onChange={e=>setNewSubInput(p=>({...p,[task.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubtask(task.id,newSubInput[task.id]||"")} placeholder="Add subtask…" className="flex-1 text-sm px-3 py-1.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-200 bg-white"/>
+                      <button onClick={()=>addSubtask(task.id,newSubInput[task.id]||"")} disabled={!(newSubInput[task.id]||"").trim()} className="text-xs px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl disabled:opacity-40">Add</button>
+                    </div>
+                  </div>
+                  <div><p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Progress · {task.progress}%</p>
+                  <input type="range" min="0" max="100" step="5" value={task.progress} onChange={e=>setProg(task.id,+e.target.value)} className="w-full accent-violet-600"/></div>
                 </div>}
               </div>;
             })}
@@ -1028,6 +1060,23 @@ Keep reply friendly and concise.`;
             </div>
           </div>
 
+          {/* Task Categories */}
+          <div>
+            <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">🏷️ Task Categories</label>
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {taskCats.map(cat=>(
+                <span key={cat} className="flex items-center gap-1 px-2.5 py-1 bg-slate-100 rounded-lg text-xs text-slate-700 font-medium">
+                  {cat}
+                  {taskCats.length>1&&<button onClick={()=>deleteCat(cat)} className="text-slate-400 hover:text-red-500 transition-colors ml-0.5">×</button>}
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input value={newCatInput} onChange={e=>setNewCatInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&addCat()} placeholder="New category name…" className="flex-1 px-3 py-2 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/>
+              <button onClick={addCat} disabled={!newCatInput.trim()||taskCats.includes(newCatInput.trim())} className="text-xs font-semibold px-3 py-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-40 text-white rounded-xl">Add</button>
+            </div>
+          </div>
+
           {/* Gemini key */}
           <div>
             <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">✦ Gemini API Key</label>
@@ -1071,7 +1120,7 @@ Keep reply friendly and concise.`;
           <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Title *</label><input type="text" value={tForm.title} onChange={e=>setTForm({...tForm,title:e.target.value})} placeholder="What needs to be done?" className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-violet-200"/></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Priority</label><select value={tForm.priority} onChange={e=>setTForm({...tForm,priority:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200">{PRI.map(p=><option key={p.id} value={p.id}>{p.label}</option>)}</select></div>
-            <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Category</label><select value={tForm.category} onChange={e=>setTForm({...tForm,category:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200">{TCATS.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+            <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Category</label><select value={tForm.category} onChange={e=>setTForm({...tForm,category:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200">{taskCats.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className="text-xs font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">Status</label><select value={tForm.status} onChange={e=>setTForm({...tForm,status:e.target.value})} className="w-full px-3 py-2.5 border border-slate-200 rounded-xl text-sm bg-white focus:outline-none focus:ring-2 focus:ring-violet-200"><option value="todo">To Do</option><option value="inprogress">In Progress</option><option value="done">Done</option></select></div>
