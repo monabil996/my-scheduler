@@ -493,18 +493,18 @@ export default function App() {
   // ── AI Chat (Gemini) ─────────────────────────────────────────────────────
   const buildContext = () => {
     const activeTasks = tasks.filter(t=>t.status!=="done");
-    const lines = [`Today: ${new Date().toDateString()}`];
+    const lines = ["Today: " + new Date().toDateString()];
     if(activeTasks.length){
-      lines.push(`\nACTIVE TASKS (${activeTasks.length} total, showing top 12):`);
+      lines.push("\nACTIVE TASKS (" + activeTasks.length + " total, showing top 12):");
       const sorted = [...activeTasks].sort((a,b)=>({urgent:0,high:1,medium:2,low:3})[a.priority]-({urgent:0,high:1,medium:2,low:3})[b.priority]);
       sorted.slice(0,12).forEach(t=>{
-        lines.push(`• [${t.priority.toUpperCase()}] ${t.title}${t.dueDate?` due:${t.dueDate}":""}${t.category!=="Work"?` (${t.category})":""}`);
+        lines.push("\u2022 [" + t.priority.toUpperCase() + "] " + t.title + (t.dueDate?" due:"+t.dueDate:"") + (t.category!=="Work"?" ("+t.category+")":""));
       });
     }
     if(notes.length){
-      lines.push(`\nNOTES (${notes.length} total, showing 5):`);
+      lines.push("\nNOTES (" + notes.length + " total, showing 5):");
       notes.slice(0,5).forEach(n=>{
-        lines.push(`• ${n.title}: ${(n.content||"").slice(0,80)}`);
+        lines.push("\u2022 " + n.title + ": " + (n.content||"").slice(0,80));
       });
     }
     return lines.join("\n");
