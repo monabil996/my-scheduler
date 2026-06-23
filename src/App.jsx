@@ -126,6 +126,12 @@ export default function App() {
   // Subtask inline input
   const [newSubInput,    setNewSubInput]    = useState({});
   const [newSubSubInput, setNewSubSubInput] = useState({});
+  // Google Calendar state
+  const [gcalToken,    setGcalToken]    = useState(null);
+  const [gcalEvents,   setGcalEvents]   = useState([]);
+  const [gcalSyncing,  setGcalSyncing]  = useState(false);
+  const [gcalLastSync, setGcalLastSync] = useState(null);
+  const [gcalError,    setGcalError]    = useState(null);
 
   // Import
   const [impTxt, setIT]  = useState("");
