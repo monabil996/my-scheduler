@@ -1034,6 +1034,7 @@ Keep reply friendly and concise.`;
                         </div>
                         );
                       })}
+                    </div>
                     <div className="flex items-center gap-2">
                       <input value={newSubInput[task.id]||""} onChange={e=>setNewSubInput(p=>({...p,[task.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubtask(task.id,newSubInput[task.id]||"")} placeholder="Add subtask…" className="flex-1 text-sm px-3 py-1.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-200 bg-white"/>
                       <button onClick={()=>addSubtask(task.id,newSubInput[task.id]||"")} disabled={!(newSubInput[task.id]||"").trim()} className="text-xs px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl disabled:opacity-40">Add</button>
