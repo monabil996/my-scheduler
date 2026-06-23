@@ -126,6 +126,8 @@ export default function App() {
   // Subtask inline input
   const [newSubInput,    setNewSubInput]    = useState({});
   const [newSubSubInput, setNewSubSubInput] = useState({});
+  const [subDetail,    setSubDetail]    = useState({});
+  const [subSubDetail, setSubSubDetail] = useState({});
   // Google Calendar state
   const [gcalToken,    setGcalToken]    = useState(null);
   const [gcalEvents,   setGcalEvents]   = useState([]);
@@ -342,7 +344,7 @@ export default function App() {
   // ── Subtask CRUD
   const addSubtask = async (taskId, title) => {
     const task = tasks.find(t=>t.id===taskId); if(!task||!title.trim()) return;
-    const sub = {id:uid(), title:title.trim(), done:false, subtasks:[]};
+    const sub = {id:uid(), title:title.trim(), done:false, subtasks:[], dateAdded:new Date().toISOString()};
     await saveTask({...task, subtasks:[...(task.subtasks||[]), sub]});
     setNewSubInput(p=>({...p,[taskId]:""}));
   };
@@ -361,7 +363,7 @@ export default function App() {
   const addSubSubtask = async (taskId, subtaskId, title) => {
     const task = tasks.find(t=>t.id===taskId); if(!task||!title.trim()) return;
     const subs = (task.subtasks||[]).map(s=>s.id===subtaskId
-      ? {...s, subtasks:[...(s.subtasks||[]), {id:uid(), title:title.trim(), done:false}]}
+      ? {...s, subtasks:[...(s.subtasks||[]), {id:uid(), title:title.trim(), done:false, dateAdded:new Date().toISOString()}]}
       : s);
     await saveTask({...task, subtasks:subs});
     setNewSubSubInput(p=>({...p,[subtaskId]:""}));
@@ -380,6 +382,20 @@ export default function App() {
       : s);
     await saveTask({...task, subtasks:subs});
   };
+  const updateSubtaskField = async (taskId, subtaskId, field, value) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId?{...s,[field]:value}:s);
+    await saveTask({...task, subtasks:subs});
+  };
+
+  const updateSubSubtaskField = async (taskId, subtaskId, subId, field, value) => {
+    const task = tasks.find(t=>t.id===taskId); if(!task) return;
+    const subs = (task.subtasks||[]).map(s=>s.id===subtaskId
+      ? {...s, subtasks:(s.subtasks||[]).map(ss=>ss.id===subId?{...ss,[field]:value}:ss)}
+      : s);
+    await saveTask({...task, subtasks:subs});
+  };
+
   // ── Tasks CRUD ───────────────────────────────────────────────────────────
   const addT = async () => {
     const t = {...tForm, id:uid(), dateAdded:new Date().toISOString(), completedAt:null};
@@ -950,29 +966,74 @@ Keep reply friendly and concise.`;
                   <div>
                     <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Subtasks {(task.subtasks||[]).length>0&&<span className="normal-case font-normal">({(task.subtasks||[]).filter(s=>s.done).length}/{(task.subtasks||[]).length})</span>}</p>
                     <div className="space-y-1 mb-2">
-                      {(task.subtasks||[]).map(sub=>(
+                      {(task.subtasks||[]).map(sub=>{
+                        const subExp = !!subDetail[sub.id];
+                        const subDur = sub.dateAdded&&sub.dueDate ? calcDuration(sub.dateAdded, sub.dueDate) : null;
+                        return (
                         <div key={sub.id}>
                           <div className="flex items-center gap-2 py-1 group/sub">
                             <button onClick={()=>toggleSubtask(task.id,sub.id)} className={`w-4 h-4 rounded border flex-shrink-0 flex items-center justify-center text-[10px] transition-all ${sub.done?"bg-emerald-500 border-emerald-500 text-white":"border-slate-300 hover:border-violet-400"}`}>{sub.done?"✓":""}</button>
                             <span className={`flex-1 text-sm ${sub.done?"line-through text-slate-400":"text-slate-700"}`}>{sub.title}</span>
+                            {sub.dueDate&&<span className="text-[10px] text-slate-400 hidden group-hover/sub:inline">{fmt(sub.dueDate+"T00:00:00")}</span>}
+                            <button onClick={()=>setSubDetail(p=>({...p,[sub.id]:!p[sub.id]}))} className={`text-[10px] px-1.5 py-0.5 rounded transition-colors ${subExp?"bg-violet-100 text-violet-600":"text-slate-300 hover:text-violet-500"}`}>{subExp?"▲":"▼"}</button>
                             <button onClick={()=>deleteSubtask(task.id,sub.id)} className="opacity-0 group-hover/sub:opacity-100 text-xs text-slate-300 hover:text-red-500 transition-opacity px-1">✕</button>
                           </div>
-                          <div className="ml-6 space-y-0.5">
-                            {(sub.subtasks||[]).map(ss=>(
-                              <div key={ss.id} className="flex items-center gap-2 py-0.5 group/ss">
-                                <button onClick={()=>toggleSubSubtask(task.id,sub.id,ss.id)} className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[9px] transition-all ${ss.done?"bg-violet-400 border-violet-400 text-white":"border-slate-300 hover:border-violet-400"}`}>{ss.done?"✓":""}</button>
-                                <span className={`flex-1 text-xs ${ss.done?"line-through text-slate-400":"text-slate-600"}`}>{ss.title}</span>
-                                <button onClick={()=>deleteSubSubtask(task.id,sub.id,ss.id)} className="opacity-0 group-hover/ss:opacity-100 text-[10px] text-slate-300 hover:text-red-500 transition-opacity px-1">✕</button>
+                          {subExp&&(
+                            <div className="ml-6 mb-2 p-2 bg-white border border-violet-100 rounded-xl space-y-2">
+                              <div className="grid grid-cols-2 gap-2">
+                                <div>
+                                  <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Date Added</label>
+                                  <input type="date" value={sub.dateAdded?sub.dateAdded.split("T")[0]:""} onChange={e=>updateSubtaskField(task.id,sub.id,"dateAdded",e.target.value?new Date(e.target.value).toISOString():"")} className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                </div>
+                                <div>
+                                  <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Due Date</label>
+                                  <input type="date" value={sub.dueDate||""} onChange={e=>updateSubtaskField(task.id,sub.id,"dueDate",e.target.value)} className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                </div>
                               </div>
-                            ))}
+                              {subDur&&<p className="text-[10px] text-slate-400">⏱ Duration: {subDur}</p>}
+                            </div>
+                          )}
+                          {/* Sub-subtasks */}
+                          <div className="ml-6 space-y-0.5">
+                            {(sub.subtasks||[]).map(ss=>{
+                              const ssExp = !!subSubDetail[ss.id];
+                              const ssDur = ss.dateAdded&&ss.dueDate ? calcDuration(ss.dateAdded, ss.dueDate) : null;
+                              return (
+                              <div key={ss.id}>
+                                <div className="flex items-center gap-2 py-0.5 group/ss">
+                                  <button onClick={()=>toggleSubSubtask(task.id,sub.id,ss.id)} className={`w-3.5 h-3.5 rounded border flex-shrink-0 flex items-center justify-center text-[9px] transition-all ${ss.done?"bg-violet-400 border-violet-400 text-white":"border-slate-300 hover:border-violet-400"}`}>{ss.done?"✓":""}</button>
+                                  <span className={`flex-1 text-xs ${ss.done?"line-through text-slate-400":"text-slate-600"}`}>{ss.title}</span>
+                                  {ss.dueDate&&<span className="text-[9px] text-slate-400 hidden group-hover/ss:inline">{fmt(ss.dueDate+"T00:00:00")}</span>}
+                                  <button onClick={()=>setSubSubDetail(p=>({...p,[ss.id]:!p[ss.id]}))} className={`text-[9px] px-1 py-0.5 rounded transition-colors ${ssExp?"bg-violet-100 text-violet-600":"text-slate-300 hover:text-violet-500"}`}>{ssExp?"▲":"▼"}</button>
+                                  <button onClick={()=>deleteSubSubtask(task.id,sub.id,ss.id)} className="opacity-0 group-hover/ss:opacity-100 text-[10px] text-slate-300 hover:text-red-500 transition-opacity px-1">✕</button>
+                                </div>
+                                {ssExp&&(
+                                  <div className="ml-5 mb-1 p-2 bg-white border border-violet-100 rounded-lg space-y-2">
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Date Added</label>
+                                        <input type="date" value={ss.dateAdded?ss.dateAdded.split("T")[0]:""} onChange={e=>updateSubSubtaskField(task.id,sub.id,ss.id,"dateAdded",e.target.value?new Date(e.target.value).toISOString():"")} className="w-full text-[10px] px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                      </div>
+                                      <div>
+                                        <label className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Due Date</label>
+                                        <input type="date" value={ss.dueDate||""} onChange={e=>updateSubSubtaskField(task.id,sub.id,ss.id,"dueDate",e.target.value)} className="w-full text-[10px] px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                      </div>
+                                    </div>
+                                    {ssDur&&<p className="text-[9px] text-slate-400">⏱ Duration: {ssDur}</p>}
+                                  </div>
+                                )}
+                              </div>
+                              );
+                            })}
+                            {/* Add sub-subtask */}
                             <div className="flex items-center gap-1 mt-0.5">
                               <input value={newSubSubInput[sub.id]||""} onChange={e=>setNewSubSubInput(p=>({...p,[sub.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubSubtask(task.id,sub.id,newSubSubInput[sub.id]||"")} placeholder="+ sub-subtask…" className="flex-1 text-xs px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300 bg-white"/>
                               <button onClick={()=>addSubSubtask(task.id,sub.id,newSubSubInput[sub.id]||"")} disabled={!(newSubSubInput[sub.id]||"").trim()} className="text-xs px-2 py-1 bg-violet-100 hover:bg-violet-200 text-violet-700 rounded-lg disabled:opacity-40">Add</button>
                             </div>
                           </div>
                         </div>
-                      ))}
-                    </div>
+                        );
+                      })}
                     <div className="flex items-center gap-2">
                       <input value={newSubInput[task.id]||""} onChange={e=>setNewSubInput(p=>({...p,[task.id]:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addSubtask(task.id,newSubInput[task.id]||"")} placeholder="Add subtask…" className="flex-1 text-sm px-3 py-1.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-violet-200 bg-white"/>
                       <button onClick={()=>addSubtask(task.id,newSubInput[task.id]||"")} disabled={!(newSubInput[task.id]||"").trim()} className="text-xs px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl disabled:opacity-40">Add</button>
