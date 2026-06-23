@@ -56,11 +56,12 @@ async function askGemini(prompt, maxTokens = 600) {
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
+      thinkingConfig: { thinkingBudget: 0 },
     }),
   });
   if (!res.ok) throw new Error(`Gemini error ${res.status}`);
   const data = await res.json();
-  return data.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  return data.candidates?.[0]?.content?.parts?.find(p => p.text)?.text ?? "";
 }
 
 async function askClaude(prompt, maxTokens = 600) {
@@ -430,22 +431,18 @@ export default function App() {
   // ── AI Chat (Gemini) ─────────────────────────────────────────────────────
   const buildContext = () => {
     const activeTasks = tasks.filter(t=>t.status!=="done");
-    const doneTasks   = tasks.filter(t=>t.status==="done");
     const lines = [`Today: ${new Date().toDateString()}`];
     if(activeTasks.length){
-      lines.push(`\nACTIVE TASKS (${activeTasks.length}):`);
-      activeTasks.forEach(t=>{
-        lines.push(`• [${t.priority.toUpperCase()}] ${t.title} | Category: ${t.category} | Progress: ${t.progress}%${t.dueDate?` | Due: ${t.dueDate}`:""}${t.notes?` | Notes: ${t.notes}`:""}`);
+      lines.push(`\nACTIVE TASKS (${activeTasks.length} total, showing top 12):`);
+      const sorted = [...activeTasks].sort((a,b)=>({urgent:0,high:1,medium:2,low:3})[a.priority]-({urgent:0,high:1,medium:2,low:3})[b.priority]);
+      sorted.slice(0,12).forEach(t=>{
+        lines.push(`• [${t.priority.toUpperCase()}] ${t.title}${t.dueDate?` due:${t.dueDate}":""}${t.category!=="Work"?` (${t.category})":""}`);
       });
     }
-    if(doneTasks.length){
-      lines.push(`\nCOMPLETED TASKS (${doneTasks.length}):`);
-      doneTasks.slice(0,5).forEach(t=>lines.push(`• ${t.title}`));
-    }
     if(notes.length){
-      lines.push(`\nNOTES (${notes.length}):`);
-      notes.slice(0,20).forEach(n=>{
-        lines.push(`• [${n.category}] ${n.title}${n.pinned?" 📌":""}: ${(n.content||"").slice(0,200)}`);
+      lines.push(`\nNOTES (${notes.length} total, showing 5):`);
+      notes.slice(0,5).forEach(n=>{
+        lines.push(`• ${n.title}: ${(n.content||"").slice(0,80)}`);
       });
     }
     return lines.join("\n");
