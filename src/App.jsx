@@ -410,6 +410,68 @@ export default function App() {
     await saveTask({...task, progress:v, status:s, completedAt:s==="done"?new Date().toISOString():null});
   };
 
+  // ── Google Calendar ──────────────────────────────────────────────────────
+  const connectGoogleCalendar = async () => {
+    const calProvider = new GoogleAuthProvider();
+    calProvider.addScope("https://www.googleapis.com/auth/calendar");
+    try {
+      const result = await signInWithPopup(auth, calProvider);
+      const credential = GoogleAuthProvider.credentialFromResult(result);
+      setGcalToken(credential.accessToken);
+      setGcalError(null);
+      showT("📅 Google Calendar connected!");
+    } catch(e) {
+      setGcalError("Failed to connect: " + (e.message||e.code));
+    }
+  };
+
+  const syncWithGoogleCalendar = async () => {
+    if (!gcalToken) return;
+    setGcalSyncing(true); setGcalError(null);
+    const headers = { "Authorization": `Bearer ${gcalToken}`, "Content-Type": "application/json" };
+    try {
+      const mapRef = doc(db, "users", user.uid, "settings", "gcalMapping");
+      const mapSnap = await getDoc(mapRef);
+      let eventMap = mapSnap.exists() ? mapSnap.data() : {};
+      const tasksWithDue = tasks.filter(t => t.dueDate && t.status !== "done");
+      const colorMap = { urgent:"11", high:"6", medium:"5", low:"2" };
+      for (const task of tasksWithDue) {
+        const event = {
+          summary: `[Task] ${task.title}`,
+          description: `Priority: ${task.priority}\nCategory: ${task.category}${task.notes?"\n\n"+task.notes:""}`,
+          start: { date: task.dueDate },
+          end:   { date: task.dueDate },
+          colorId: colorMap[task.priority] || "5",
+        };
+        if (eventMap[task.id]) {
+          await fetch(`https://www.googleapis.com/calendar/v3/calendars/primary/events/${eventMap[task.id]}`,
+            { method:"PATCH", headers, body:JSON.stringify(event) });
+        } else {
+          const resp = await fetch("https://www.googleapis.com/calendar/v3/calendars/primary/events",
+            { method:"POST", headers, body:JSON.stringify(event) });
+          if (resp.ok) { const created = await resp.json(); eventMap[task.id] = created.id; }
+        }
+      }
+      await setDoc(mapRef, eventMap);
+      const now    = new Date().toISOString();
+      const future = new Date(Date.now() + 30*24*60*60*1000).toISOString();
+      const evResp = await fetch(
+        `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${now}&timeMax=${future}&singleEvents=true&orderBy=startTime&maxResults=50`,
+        { headers }
+      );
+      if (evResp.status === 401) {
+        setGcalToken(null); setGcalError("Session expired — reconnect."); setGcalSyncing(false); return;
+      }
+      const evData = await evResp.json();
+      setGcalEvents(evData.items || []);
+      setGcalLastSync(new Date().toISOString());
+      showT(`📅 Synced! Pushed ${tasksWithDue.length} tasks, pulled ${(evData.items||[]).length} events.`);
+    } catch(e) {
+      setGcalError("Sync failed: " + e.message);
+    }
+    setGcalSyncing(false);
+  };
+
   // ── Notes CRUD ───────────────────────────────────────────────────────────
   const addN = async () => {
     const n = {...nForm, id:uid(), dateCreated:new Date().toISOString(), dateModified:new Date().toISOString()};
@@ -704,7 +766,7 @@ Keep reply friendly and concise.`;
     {/* Tabs */}
     <div className="bg-white border-b border-slate-200 px-4">
       <div className="max-w-3xl mx-auto flex overflow-x-auto">
-        {[{id:"home",l:"🤖 AI"},{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"daily",l:"☀️ Daily"},{id:"reminders",l:"🔔 Reminders"},{id:"import",l:"✨ Import"}].map(t=>(
+        {[{id:"home",l:"🤖 AI"},{id:"tasks",l:"📝 Tasks"},{id:"notes",l:"📓 Notes"},{id:"calendar",l:"📅 Calendar"},{id:"daily",l:"☀️ Daily"},{id:"reminders",l:"🔔 Reminders"},{id:"import",l:"✨ Import"}].map(t=>(
           <button key={t.id} onClick={()=>setTab(t.id)} className={`px-4 py-3 text-sm font-medium border-b-2 whitespace-nowrap transition-colors ${tab===t.id?"border-violet-600 text-violet-700":"border-transparent text-slate-500 hover:text-slate-700"}`}>{t.l}</button>
         ))}
       </div>
@@ -1064,6 +1126,78 @@ Keep reply friendly and concise.`;
           </div>
         </>}
       </div>}
+
+      {/* ── CALENDAR ── */}
+      {tab==="calendar"&&<>
+        <div className="mb-4">
+          <h2 className="text-lg font-bold text-slate-800 mb-1">📅 Google Calendar</h2>
+          <p className="text-slate-400 text-sm">Two-way sync: push tasks to Calendar, pull events into the app.</p>
+        </div>
+        <div className="bg-white rounded-2xl border border-slate-200 p-5 mb-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">{gcalToken?"✅ Connected":"Connect Google Calendar"}</p>
+              <p className="text-xs text-slate-400 mt-0.5">{gcalLastSync?`Last synced: ${new Date(gcalLastSync).toLocaleString()}`:"Not synced yet"}</p>
+            </div>
+            {gcalToken
+              ? <div className="flex gap-2 flex-shrink-0">
+                  <button onClick={syncWithGoogleCalendar} disabled={gcalSyncing}
+                    className="text-sm px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl font-semibold disabled:opacity-50 transition-colors">
+                    {gcalSyncing?"⏳ Syncing…":"🔄 Sync Now"}
+                  </button>
+                  <button onClick={()=>{setGcalToken(null);setGcalEvents([]);setGcalLastSync(null);}}
+                    className="text-sm px-3 py-2 border border-slate-200 text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">
+                    Disconnect
+                  </button>
+                </div>
+              : <button onClick={connectGoogleCalendar}
+                  className="text-sm px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold flex-shrink-0 transition-colors">
+                  Connect
+                </button>
+            }
+          </div>
+          {gcalError&&<p className="text-xs text-red-600 mt-3 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{gcalError}</p>}
+        </div>
+        {!gcalToken&&<div className="bg-slate-50 rounded-2xl border border-slate-200 p-5 mb-4">
+          <p className="text-sm font-semibold text-slate-700 mb-3">How sync works</p>
+          <div className="space-y-3">
+            <div className="flex items-start gap-3">
+              <span className="text-base mt-0.5">➡️</span>
+              <div><p className="text-sm font-medium text-slate-700">Tasks → Calendar</p><p className="text-xs text-slate-400 mt-0.5">Tasks with due dates become all-day events, color-coded by priority. Already-synced tasks update, not duplicate.</p></div>
+            </div>
+            <div className="flex items-start gap-3">
+              <span className="text-base mt-0.5">⬅️</span>
+              <div><p className="text-sm font-medium text-slate-700">Calendar → App</p><p className="text-xs text-slate-400 mt-0.5">Your upcoming events (next 30 days) appear below alongside your tasks.</p></div>
+            </div>
+          </div>
+        </div>}
+        {gcalToken&&gcalEvents.length>0&&<>
+          <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2">Upcoming Events (next 30 days)</p>
+          <div className="space-y-2">
+            {gcalEvents.map(ev=>{
+              const isTask = ev.summary?.startsWith("[Task]");
+              const dateStr = ev.start?.date || (ev.start?.dateTime||"").split("T")[0];
+              const title = isTask ? ev.summary.replace("[Task] ","") : ev.summary;
+              return(
+                <div key={ev.id} className={`bg-white rounded-xl border p-3 flex items-start gap-3 ${isTask?"border-violet-200":"border-slate-200"}`}>
+                  <span className="text-lg flex-shrink-0">{isTask?"✅":"📅"}</span>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-slate-800 truncate">{title}</p>
+                    <p className="text-xs text-slate-400">{dateStr}</p>
+                  </div>
+                  {isTask&&<span className="text-xs text-violet-600 bg-violet-100 px-2 py-0.5 rounded-full flex-shrink-0">synced task</span>}
+                </div>
+              );
+            })}
+          </div>
+        </>}
+        {gcalToken&&gcalEvents.length===0&&gcalLastSync&&(
+          <div className="text-center py-12 text-slate-400"><p className="text-4xl mb-2">📭</p><p className="text-sm">No upcoming events in the next 30 days</p></div>
+        )}
+        {gcalToken&&!gcalLastSync&&(
+          <div className="text-center py-12 text-slate-400"><p className="text-4xl mb-2">🔄</p><p className="text-sm">Press "Sync Now" to push your tasks and load calendar events</p></div>
+        )}
+      </>}
 
       {/* ── IMPORT ── */}
       {tab==="import"&&<>
