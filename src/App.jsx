@@ -968,7 +968,6 @@ Keep reply friendly and concise.`;
                     <div className="space-y-1 mb-2">
                       {(task.subtasks||[]).map(sub=>{
                         const subExp = !!subDetail[sub.id];
-                        const subDur = sub.dateAdded&&sub.dueDate ? calcDuration(sub.dateAdded, sub.dueDate) : null;
                         return (
                         <div key={sub.id}>
                           <div className="flex items-center gap-2 py-1 group/sub">
@@ -990,14 +989,16 @@ Keep reply friendly and concise.`;
                                   <input type="date" value={sub.dueDate||""} onChange={e=>updateSubtaskField(task.id,sub.id,"dueDate",e.target.value)} className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
                                 </div>
                               </div>
-                              {subDur&&<p className="text-[10px] text-slate-400">⏱ Duration: {subDur}</p>}
+                              <div>
+                                  <label className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Duration</label>
+                                  <input type="text" value={sub.duration||""} onChange={e=>updateSubtaskField(task.id,sub.id,"duration",e.target.value)} placeholder="e.g. 3 days" className="w-full text-xs px-2 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                </div>
                             </div>
                           )}
                           {/* Sub-subtasks */}
                           <div className="ml-6 space-y-0.5">
                             {(sub.subtasks||[]).map(ss=>{
                               const ssExp = !!subSubDetail[ss.id];
-                              const ssDur = ss.dateAdded&&ss.dueDate ? calcDuration(ss.dateAdded, ss.dueDate) : null;
                               return (
                               <div key={ss.id}>
                                 <div className="flex items-center gap-2 py-0.5 group/ss">
@@ -1019,7 +1020,10 @@ Keep reply friendly and concise.`;
                                         <input type="date" value={ss.dueDate||""} onChange={e=>updateSubSubtaskField(task.id,sub.id,ss.id,"dueDate",e.target.value)} className="w-full text-[10px] px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
                                       </div>
                                     </div>
-                                    {ssDur&&<p className="text-[9px] text-slate-400">⏱ Duration: {ssDur}</p>}
+                                    <div>
+                                        <label className="text-[9px] font-semibold text-slate-400 uppercase tracking-wider block mb-1">Duration</label>
+                                        <input type="text" value={ss.duration||""} onChange={e=>updateSubSubtaskField(task.id,sub.id,ss.id,"duration",e.target.value)} placeholder="e.g. 2 hours" className="w-full text-[10px] px-2 py-1 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-violet-300"/>
+                                      </div>
                                   </div>
                                 )}
                               </div>
