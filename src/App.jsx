@@ -564,7 +564,7 @@ ACTION RULES:
 - SEARCH: user wants to find information from the internet
 - CHAT: general questions about tasks/notes, analysis, or conversation
 
-For ADD_TASK: fill in task object. Priority: urgent/high/medium/low. Category: ${TCATS.join("/")}. dueDate: YYYY-MM-DD or empty.
+For ADD_TASK: fill in task object. Priority: urgent/high/medium/low. Category: ${taskCats.join("/")}. dueDate: YYYY-MM-DD or empty.
 For ADD_NOTE: fill in note object. Category: ${NCATS.join("/")}.
 For EMAIL_DRAFT: fill in email object with to, subject, body.
 For SEARCH: fill searchQuery with best search terms.
@@ -657,7 +657,7 @@ Keep reply friendly and concise.`;
   // ── AI Smart Import (Gemini) ──────────────────────────────────────────────
   const doImport = async () => {
     if(!impTxt.trim()) return; setIL(true); setIR(null);
-    const prompt = `Parse these notes into tasks. Return ONLY a valid JSON array, no markdown fences, no explanation:\n[{"title":"","notes":"","category":"Work","priority":"medium","dueDate":""}]\nPriority values: urgent/high/medium/low. Category values: ${TCATS.join("/")}\n\nNotes:\n${impTxt}`;
+    const prompt = `Parse these notes into tasks. Return ONLY a valid JSON array, no markdown fences, no explanation:\n[{"title":"","notes":"","category":"Work","priority":"medium","dueDate":""}]\nPriority values: urgent/high/medium/low. Category values: ${taskCats.join("/")}\n\nNotes:\n${impTxt}`;
     try {
       const raw  = await (aiProvider==="claude" ? askClaude(prompt,2000) : askGemini(prompt, 2000));
       const clean = raw.replace(/```json|```/g,"").trim();
