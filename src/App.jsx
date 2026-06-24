@@ -56,7 +56,6 @@ async function askGemini(prompt, maxTokens = 600) {
     body: JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
       generationConfig: { maxOutputTokens: maxTokens, temperature: 0.7 },
-      thinkingConfig: { thinkingBudget: 0 },
     }),
   });
   if (!res.ok) throw new Error(`Gemini error ${res.status}`);
